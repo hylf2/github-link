@@ -18,6 +18,7 @@
 | DNS 聚合 | 并行使用系统 DNS、腾讯 DoH、阿里 DoH 和 Cloudflare DoH |
 | 候选 IP 优选 | 对 A/AAAA 地址执行 TCP 与官方 TLS 证书验证，保留最多 3 个候选 |
 | 故障切换 | 双 IP 错峰竞速；TLS 首包超时后重放 ClientHello 并切换候选 IP |
+| Daemon 自动恢复 | App 重开时自动恢复未加载或未就绪的 LaunchAgent，并等待控制 Socket 可用 |
 | Git HTTPS | 使用独立 Git include 文件接入本地代理，不覆盖其他 Git 配置 |
 | GitHub SSH | 代理 SSH 连接，`github.com:22` 不可用时回退 `ssh.github.com:443` |
 | PAC 自动代理 | 仅将 GitHub 网页及静态资源域名交给本地代理，其余流量保持直连 |
@@ -62,7 +63,7 @@ HTTPS 建立 CONNECT 后，GitHub Link 只转发原始 TLS 字节。证书校验
 
 ## 安装
 
-1. 从 [Releases](https://github.com/hylf2/github-link/releases) 下载 `GitHub-Link-v0.1.0-macos-arm64.zip`。
+1. 从 [Releases](https://github.com/hylf2/github-link/releases/latest) 下载最新的 macOS arm64 安装包。
 2. 解压后打开 `GitHub Link.app`。
 3. 点击右上角电源按钮启用服务。
 4. App 会安装用户级 launchd 服务，并接入 Git HTTPS 与 SSH 配置。

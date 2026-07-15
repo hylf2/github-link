@@ -9,6 +9,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpStream, UnixStream};
 
@@ -86,9 +87,26 @@ async fn enable() -> Result<()> {
     let (cli, daemon) = install_runtime_binaries()?;
     install_tool_integrations(&config, &cli)?;
     install_launch_agent(&daemon)?;
+    wait_for_daemon().await?;
     println!("GitHub Link enabled");
     println!("PAC URL: http://127.0.0.1:{}/proxy.pac", config.pac_port);
     Ok(())
+}
+
+async fn wait_for_daemon() -> Result<()> {
+    let mut last_error = None;
+    for attempt in 0..30 {
+        match send(ControlRequest::Status).await {
+            Ok(_) => return Ok(()),
+            Err(error) => last_error = Some(error),
+        }
+        if attempt < 29 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("daemon did not become ready"))
+        .context("launch agent installed but daemon did not become ready within 6 seconds"))
 }
 
 async fn disable() -> Result<()> {

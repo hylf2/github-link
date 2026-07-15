@@ -5,11 +5,17 @@ use github_link_core::{
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewWindow};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+use tokio::process::Command as TokioCommand;
+
+const DAEMON_LABEL: &str = "com.fengc.github-linkd";
+const DAEMON_RETRY_ATTEMPTS: usize = 20;
+const DAEMON_RETRY_DELAY: Duration = Duration::from_millis(200);
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -21,8 +27,8 @@ struct SettingsInput {
 }
 
 #[tauri::command]
-async fn get_status() -> Result<serde_json::Value, String> {
-    response_value(send(ControlRequest::Status).await)
+async fn get_status(app: AppHandle) -> Result<serde_json::Value, String> {
+    response_value(send_with_recovery(&app, ControlRequest::Status).await)
 }
 
 #[tauri::command]
@@ -32,20 +38,20 @@ fn get_config() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn probe() -> Result<serde_json::Value, String> {
-    response_value(send(ControlRequest::Probe { host: None }).await)
+async fn probe(app: AppHandle) -> Result<serde_json::Value, String> {
+    response_value(send_with_recovery(&app, ControlRequest::Probe { host: None }).await)
 }
 
 #[tauri::command]
-async fn set_route(mode: String) -> Result<serde_json::Value, String> {
+async fn set_route(app: AppHandle, mode: String) -> Result<serde_json::Value, String> {
     let mode = mode
         .parse::<RouteMode>()
         .map_err(|error| error.to_string())?;
-    response_value(send(ControlRequest::SetRoute { mode }).await)
+    response_value(send_with_recovery(&app, ControlRequest::SetRoute { mode }).await)
 }
 
 #[tauri::command]
-async fn save_settings(input: SettingsInput) -> Result<serde_json::Value, String> {
+async fn save_settings(app: AppHandle, input: SettingsInput) -> Result<serde_json::Value, String> {
     let mut config =
         AppConfig::load_or_create(&config_path()).map_err(|error| error.to_string())?;
     config.refresh_seconds = input.refresh_seconds.clamp(30, 3_600);
@@ -72,7 +78,7 @@ async fn save_settings(input: SettingsInput) -> Result<serde_json::Value, String
     config
         .save(&config_path())
         .map_err(|error| error.to_string())?;
-    response_value(send(ControlRequest::Reload).await)
+    response_value(send_with_recovery(&app, ControlRequest::Reload).await)
 }
 
 #[tauri::command]
@@ -98,10 +104,109 @@ fn open_network_settings() -> Result<(), String> {
     Ok(())
 }
 
-async fn send(request: ControlRequest) -> Result<ControlResponse, String> {
-    let mut stream = UnixStream::connect(socket_path())
+async fn send_with_recovery(
+    app: &AppHandle,
+    request: ControlRequest,
+) -> Result<ControlResponse, String> {
+    let path = socket_path();
+    match send_once(&path, request.clone()).await {
+        Ok(response) => return Ok(response),
+        Err(initial_error) => {
+            let config = AppConfig::load_or_create(&config_path())
+                .map_err(|error| format!("Daemon unavailable: {initial_error}; {error}"))?;
+            if !config.enabled {
+                return Err(format!("Daemon unavailable: {initial_error}"));
+            }
+        }
+    }
+
+    if kickstart_daemon().await.is_ok()
+        && let Ok(response) = retry_send(
+            &path,
+            request.clone(),
+            DAEMON_RETRY_ATTEMPTS / 2,
+            DAEMON_RETRY_DELAY,
+        )
         .await
-        .map_err(|error| format!("Daemon unavailable: {error}"))?;
+    {
+        return Ok(response);
+    }
+
+    reinstall_daemon(app).await?;
+    retry_send(&path, request, DAEMON_RETRY_ATTEMPTS, DAEMON_RETRY_DELAY)
+        .await
+        .map_err(|error| format!("Daemon unavailable after automatic recovery: {error}"))
+}
+
+async fn kickstart_daemon() -> Result<(), String> {
+    let uid = command_output("id", &["-u"]).await?;
+    let target = format!("gui/{uid}/{DAEMON_LABEL}");
+    let kickstart = TokioCommand::new("launchctl")
+        .args(["kickstart", "-k", &target])
+        .status()
+        .await
+        .map_err(|error| format!("failed to restart daemon: {error}"))?;
+    if kickstart.success() {
+        Ok(())
+    } else {
+        Err(format!("launchctl could not kickstart {DAEMON_LABEL}"))
+    }
+}
+
+async fn reinstall_daemon(app: &AppHandle) -> Result<(), String> {
+    let cli = bundled_binary(app, "github-link").map_err(|error| error.to_string())?;
+    let output = TokioCommand::new(cli)
+        .arg("enable")
+        .output()
+        .await
+        .map_err(|error| format!("failed to reinstall daemon: {error}"))?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let message = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        Err(if message.is_empty() {
+            "failed to reinstall daemon".into()
+        } else {
+            message
+        })
+    }
+}
+
+async fn command_output(program: &str, args: &[&str]) -> Result<String, String> {
+    let output = TokioCommand::new(program)
+        .args(args)
+        .output()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        return Err(format!("{program} exited with {}", output.status));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
+
+async fn retry_send(
+    path: &Path,
+    request: ControlRequest,
+    attempts: usize,
+    delay: Duration,
+) -> Result<ControlResponse, String> {
+    let mut last_error = "daemon did not become ready".to_owned();
+    for attempt in 0..attempts {
+        match send_once(path, request.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(error) => last_error = error,
+        }
+        if attempt + 1 < attempts {
+            tokio::time::sleep(delay).await;
+        }
+    }
+    Err(last_error)
+}
+
+async fn send_once(path: &Path, request: ControlRequest) -> Result<ControlResponse, String> {
+    let mut stream = UnixStream::connect(path)
+        .await
+        .map_err(|error| error.to_string())?;
     stream
         .write_all(
             serde_json::to_string(&request)
@@ -119,6 +224,9 @@ async fn send(request: ControlRequest) -> Result<ControlResponse, String> {
         .read_line(&mut line)
         .await
         .map_err(|error| error.to_string())?;
+    if line.is_empty() {
+        return Err("daemon closed the control connection without a response".into());
+    }
     serde_json::from_str(&line).map_err(|error| error.to_string())
 }
 
@@ -204,4 +312,44 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitHub Link");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir_in;
+    use tokio::net::UnixListener;
+
+    #[tokio::test]
+    async fn retries_until_control_socket_is_ready() {
+        let target_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("target");
+        std::fs::create_dir_all(&target_dir).unwrap();
+        let directory = tempdir_in(target_dir).unwrap();
+        let path = directory.path().join("control.sock");
+        let server_path = path.clone();
+        let server = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(40)).await;
+            let listener = UnixListener::bind(server_path).unwrap();
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = String::new();
+            BufReader::new(&mut stream)
+                .read_line(&mut request)
+                .await
+                .unwrap();
+            assert!(request.contains("\"command\":\"status\""));
+            stream
+                .write_all(b"{\"type\":\"ok\",\"message\":\"ready\"}\n")
+                .await
+                .unwrap();
+        });
+
+        let response = retry_send(&path, ControlRequest::Status, 10, Duration::from_millis(10))
+            .await
+            .unwrap();
+        assert!(matches!(response, ControlResponse::Ok { message } if message == "ready"));
+        server.await.unwrap();
+    }
 }

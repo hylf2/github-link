@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "github-link-core",
@@ -1263,12 +1263,13 @@ dependencies = [
  "serde_json",
  "tauri",
  "tauri-build",
+ "tempfile",
  "tokio",
 ]
 
 [[package]]
 name = "github-link-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1280,7 +1281,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -1300,7 +1301,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-daemon"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1315,7 +1316,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-proxy"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bytes",
