@@ -1,0 +1,41 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/github-link-core",
+  "crates/github-link-proxy",
+  "crates/github-link-daemon",
+  "crates/github-link-cli",
+  "src-tauri",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1"
+async-trait = "0.1"
+bytes = "1"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+futures = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rustls = "0.23"
+rustls-native-certs = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-rustls = "0.26"
+tokio-socks = "0.5"
+toml = "0.9"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+url = "2"
