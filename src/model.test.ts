@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DaemonStatus, healthScore, unwrapStatus } from "./model";
+import { DaemonStatus, healthScore, unwrapAcceleration, unwrapStatus } from "./model";
 
 function status(scores: number[]): DaemonStatus {
   return {
@@ -17,6 +17,15 @@ function status(scores: number[]): DaemonStatus {
       `host-${index}:443`,
       [{ address: "1.1.1.1", tcp_ms: 20, tls_ms: 30, score, success_rate: 1, last_error: null }],
     ])),
+    download_acceleration: {
+      enabled: false,
+      best_mirror: null,
+      accelerated_url: null,
+      latency_ms: null,
+      checked_at_unix_ms: null,
+      candidates: [],
+      last_error: null,
+    },
   };
 }
 
@@ -38,5 +47,23 @@ describe("unwrapStatus", () => {
 
   it("rejects malformed daemon responses", () => {
     expect(() => unwrapStatus({ type: "ok" })).toThrow(/unexpected response/);
+  });
+});
+
+describe("unwrapAcceleration", () => {
+  it("returns acceleration responses", () => {
+    const result = {
+      original_url: "https://github.com/a/b/archive/main.zip",
+      accelerated_url: "https://gh.example/https://github.com/a/b/archive/main.zip",
+      mirror: "gh.example",
+      latency_ms: 420,
+      candidates: [],
+    };
+    expect(unwrapAcceleration({ type: "acceleration", result })).toBe(result);
+  });
+
+  it("surfaces daemon errors", () => {
+    expect(() => unwrapAcceleration({ type: "error", message: "no mirrors" }))
+      .toThrow("no mirrors");
   });
 });

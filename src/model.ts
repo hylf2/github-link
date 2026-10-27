@@ -9,6 +9,32 @@ export type CandidateHealth = {
   last_error: string | null;
 };
 
+export type MirrorCandidate = {
+  host: string;
+  latency_ms: number | null;
+  score: number;
+  http_status: number | null;
+  last_error: string | null;
+};
+
+export type DownloadAccelerationStatus = {
+  enabled: boolean;
+  best_mirror: string | null;
+  accelerated_url: string | null;
+  latency_ms: number | null;
+  checked_at_unix_ms: number | null;
+  candidates: MirrorCandidate[];
+  last_error: string | null;
+};
+
+export type AccelerationResult = {
+  original_url: string;
+  accelerated_url: string;
+  mirror: string;
+  latency_ms: number;
+  candidates: MirrorCandidate[];
+};
+
 export type DaemonStatus = {
   running: boolean;
   enabled: boolean;
@@ -21,6 +47,7 @@ export type DaemonStatus = {
   updated_at_unix_ms: number;
   selected_ips: Record<string, string>;
   candidates: Record<string, CandidateHealth[]>;
+  download_acceleration: DownloadAccelerationStatus;
 };
 
 export function healthScore(status: DaemonStatus | null) {
@@ -34,4 +61,11 @@ export function unwrapStatus(value: unknown): DaemonStatus {
   const response = value as { type?: string; status?: DaemonStatus };
   if (response.type === "status" && response.status) return response.status;
   throw new Error("Daemon returned an unexpected response");
+}
+
+export function unwrapAcceleration(value: unknown): AccelerationResult {
+  const response = value as { type?: string; result?: AccelerationResult };
+  if (response.type === "acceleration" && response.result) return response.result;
+  const error = (value as { message?: string }).message;
+  throw new Error(error || "Daemon returned an unexpected acceleration response");
 }

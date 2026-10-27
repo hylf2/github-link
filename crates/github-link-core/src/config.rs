@@ -60,6 +60,35 @@ pub struct UpstreamConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DownloadAccelerationConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_acceleration_site")]
+    pub site_url: String,
+    #[serde(default = "default_acceleration_nodes")]
+    pub nodes: Vec<String>,
+    #[serde(default = "default_acceleration_timeout")]
+    pub timeout_seconds: u64,
+    #[serde(default = "default_acceleration_max_nodes")]
+    pub max_nodes: usize,
+    #[serde(default = "default_acceleration_refresh_seconds")]
+    pub refresh_seconds: u64,
+}
+
+impl Default for DownloadAccelerationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            site_url: default_acceleration_site(),
+            nodes: default_acceleration_nodes(),
+            timeout_seconds: default_acceleration_timeout(),
+            max_nodes: default_acceleration_max_nodes(),
+            refresh_seconds: default_acceleration_refresh_seconds(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default = "schema_version")]
     pub schema_version: u32,
@@ -77,6 +106,8 @@ pub struct AppConfig {
     pub doh_providers: Vec<String>,
     #[serde(default)]
     pub upstream: Option<UpstreamConfig>,
+    #[serde(default)]
+    pub download_acceleration: DownloadAccelerationConfig,
     #[serde(default = "default_refresh_seconds")]
     pub refresh_seconds: u64,
     #[serde(default = "default_cache_seconds")]
@@ -96,6 +127,7 @@ impl Default for AppConfig {
             domains: default_domains(),
             doh_providers: default_doh_providers(),
             upstream: None,
+            download_acceleration: DownloadAccelerationConfig::default(),
             refresh_seconds: default_refresh_seconds(),
             cache_seconds: default_cache_seconds(),
             quarantine_seconds: default_quarantine_seconds(),
@@ -242,6 +274,40 @@ fn default_quarantine_seconds() -> u64 {
     60
 }
 
+fn default_acceleration_site() -> String {
+    "https://github.akams.cn/".into()
+}
+
+fn default_acceleration_timeout() -> u64 {
+    8
+}
+
+fn default_acceleration_max_nodes() -> usize {
+    16
+}
+
+fn default_acceleration_refresh_seconds() -> u64 {
+    600
+}
+
+fn default_acceleration_nodes() -> Vec<String> {
+    vec![
+        "cdn.akaere.online",
+        "github.tbap.top",
+        "gh.dpik.top",
+        "gh-proxy.com",
+        "ghproxy.net",
+        "gh.acmsz.top",
+        "down.mxw.xx.kg",
+        "cfgh.ikgy.top",
+        "gh.monlor.com",
+        "ghfast.top",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
 fn default_doh_providers() -> Vec<String> {
     vec![
         "https://doh.pub/dns-query".into(),
@@ -287,5 +353,30 @@ mod tests {
         assert!(!is_public_ip("127.0.0.1".parse().unwrap()));
         assert!(!is_public_ip("10.0.0.1".parse().unwrap()));
         assert!(is_public_ip("140.82.113.3".parse().unwrap()));
+    }
+
+    #[test]
+    fn old_config_gets_safe_acceleration_defaults() {
+        let config: AppConfig = toml::from_str(
+            r#"
+            schema_version = 1
+            enabled = true
+            route_mode = "auto"
+            proxy_port = 38457
+            pac_port = 38458
+            refresh_seconds = 300
+            cache_seconds = 600
+            quarantine_seconds = 60
+            domains = ["github.com"]
+            doh_providers = ["https://doh.pub/dns-query"]
+            "#,
+        )
+        .unwrap();
+        assert!(!config.download_acceleration.enabled);
+        assert_eq!(
+            config.download_acceleration.site_url,
+            "https://github.akams.cn/"
+        );
+        assert!(!config.download_acceleration.nodes.is_empty());
     }
 }

@@ -1,4 +1,4 @@
-use crate::{DaemonStatus, RouteMode};
+use crate::{AccelerationResult, DaemonStatus, MirrorCandidate, RouteMode};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub enum ControlRequest {
     Status,
     Probe { host: Option<String> },
+    RefreshMirrors,
+    Accelerate { url: String },
     SetRoute { mode: RouteMode },
     Reload,
     Shutdown,
@@ -15,6 +17,8 @@ pub enum ControlRequest {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ControlResponse {
     Status { status: DaemonStatus },
+    Mirrors { candidates: Vec<MirrorCandidate> },
+    Acceleration { result: AccelerationResult },
     Ok { message: String },
     Error { message: String },
 }

@@ -13,6 +13,26 @@ pub struct CandidateHealth {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MirrorCandidate {
+    pub host: String,
+    pub latency_ms: Option<u64>,
+    pub score: f64,
+    pub http_status: Option<u16>,
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DownloadAccelerationStatus {
+    pub enabled: bool,
+    pub best_mirror: Option<String>,
+    pub accelerated_url: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub checked_at_unix_ms: Option<u64>,
+    pub candidates: Vec<MirrorCandidate>,
+    pub last_error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonStatus {
     pub running: bool,
@@ -26,6 +46,8 @@ pub struct DaemonStatus {
     pub updated_at_unix_ms: u64,
     pub selected_ips: BTreeMap<String, String>,
     pub candidates: BTreeMap<String, Vec<CandidateHealth>>,
+    #[serde(default)]
+    pub download_acceleration: DownloadAccelerationStatus,
 }
 
 impl DaemonStatus {
@@ -42,12 +64,17 @@ impl DaemonStatus {
             updated_at_unix_ms: now_ms(),
             selected_ips: BTreeMap::new(),
             candidates: BTreeMap::new(),
+            download_acceleration: DownloadAccelerationStatus::default(),
         }
     }
 
     pub fn touch(&mut self) {
         self.updated_at_unix_ms = now_ms();
     }
+}
+
+pub fn now_unix_ms() -> u64 {
+    now_ms()
 }
 
 fn now_ms() -> u64 {

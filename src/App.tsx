@@ -4,6 +4,8 @@ import {
   Activity,
   Check,
   Clipboard,
+  Download,
+  ExternalLink,
   Gauge,
   GitBranch,
   Network,
@@ -16,11 +18,26 @@ import {
   TriangleAlert,
   Wifi,
 } from "lucide-react";
-import { DaemonStatus, RouteMode, healthScore, unwrapStatus } from "./model";
+import {
+  AccelerationResult,
+  DaemonStatus,
+  RouteMode,
+  healthScore,
+  unwrapAcceleration,
+  unwrapStatus,
+} from "./model";
 
 type AppConfig = {
   route_mode: RouteMode;
   refresh_seconds: number;
+  download_acceleration: {
+    enabled: boolean;
+    site_url: string;
+    nodes: string[];
+    timeout_seconds: number;
+    max_nodes: number;
+    refresh_seconds: number;
+  };
   upstream: null | {
     kind: "http" | "socks5";
     host: string;
@@ -55,11 +72,31 @@ const mockStatus: DaemonStatus = {
       { address: "185.199.108.133", tcp_ms: 74, tls_ms: 96, score: 94, success_rate: 1, last_error: null },
     ],
   },
+  download_acceleration: {
+    enabled: true,
+    best_mirror: "gh-proxy.com",
+    accelerated_url: "https://gh-proxy.com/https://github.com/a/b/archive/main.zip",
+    latency_ms: 420,
+    checked_at_unix_ms: Date.now(),
+    candidates: [
+      { host: "gh-proxy.com", latency_ms: 420, score: 89.5, http_status: 206, last_error: null },
+      { host: "cdn.akaere.online", latency_ms: 780, score: 80.5, http_status: 206, last_error: null },
+    ],
+    last_error: null,
+  },
 };
 
 const mockConfig: AppConfig = {
   route_mode: "auto",
   refresh_seconds: 300,
+  download_acceleration: {
+    enabled: false,
+    site_url: "https://github.akams.cn/",
+    nodes: [],
+    timeout_seconds: 8,
+    max_nodes: 16,
+    refresh_seconds: 600,
+  },
   upstream: null,
 };
 
@@ -89,6 +126,10 @@ export default function App() {
   const [upstreamHost, setUpstreamHost] = useState("");
   const [upstreamPort, setUpstreamPort] = useState("7890");
   const [refreshSeconds, setRefreshSeconds] = useState("300");
+  const [downloadEnabled, setDownloadEnabled] = useState(false);
+  const [accelerationSite, setAccelerationSite] = useState("https://github.akams.cn/");
+  const [downloadUrl, setDownloadUrl] = useState("");
+  const [acceleration, setAcceleration] = useState<AccelerationResult | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -124,6 +165,8 @@ export default function App() {
     setUpstreamType(config.upstream?.kind ?? "none");
     setUpstreamHost(config.upstream?.host ?? "");
     setUpstreamPort(String(config.upstream?.port ?? 7890));
+    setDownloadEnabled(config.download_acceleration.enabled);
+    setAccelerationSite(config.download_acceleration.site_url);
   }, [config]);
 
   const currentScore = useMemo(() => healthScore(status), [status]);
@@ -178,9 +221,39 @@ export default function App() {
           upstreamHost: upstreamType === "none" ? null : upstreamHost,
           upstreamPort: upstreamType === "none" ? null : Number(upstreamPort),
           refreshSeconds: Number(refreshSeconds),
+          downloadAccelerationEnabled: downloadEnabled,
+          downloadAccelerationSite: accelerationSite,
+          downloadAccelerationMaxNodes: config.download_acceleration.max_nodes,
         },
       });
     });
+  }
+
+  async function accelerateDownload() {
+    if (!downloadUrl.trim()) return;
+    if (!isTauri()) {
+      setAcceleration(mockStatus.download_acceleration.accelerated_url ? {
+        original_url: downloadUrl,
+        accelerated_url: mockStatus.download_acceleration.accelerated_url,
+        mirror: mockStatus.download_acceleration.best_mirror ?? "gh-proxy.com",
+        latency_ms: mockStatus.download_acceleration.latency_ms ?? 420,
+        candidates: mockStatus.download_acceleration.candidates,
+      } : null);
+      return;
+    }
+    await action(async () => {
+      const value = await call<unknown>("accelerate_download", { url: downloadUrl.trim() });
+      setAcceleration(unwrapAcceleration(value));
+    });
+  }
+
+  async function openAcceleratedUrl() {
+    if (!acceleration) return;
+    if (isTauri()) {
+      await call("open_accelerated_url", { url: acceleration.accelerated_url });
+    } else {
+      window.open(acceleration.accelerated_url, "_blank", "noopener,noreferrer");
+    }
   }
 
   const enabled = status?.enabled ?? false;
@@ -245,6 +318,58 @@ export default function App() {
             </div>
           </div>
 
+          <div className="section-block download-accelerator">
+            <div className="section-title">
+              <div><Download size={17} /><h2>GitHub 下载加速</h2></div>
+              <span>{status?.download_acceleration.enabled ? "已启用" : "未启用"}</span>
+            </div>
+            {status?.download_acceleration.enabled ? (
+              <>
+                <div className="mirror-input">
+                  <input
+                    value={downloadUrl}
+                    onChange={(event) => setDownloadUrl(event.target.value)}
+                    placeholder="粘贴 Release / Archive / Raw 公开链接"
+                    onKeyDown={(event) => { if (event.key === "Enter") void accelerateDownload(); }}
+                  />
+                  <button className="primary-button" onClick={accelerateDownload} disabled={busy || !downloadUrl.trim()}>
+                    {busy ? "测速中" : "选择最快节点"}
+                  </button>
+                </div>
+                {acceleration ? (
+                  <div className="mirror-result">
+                    <div><span>最佳镜像</span><strong>{acceleration.mirror}</strong><em>{acceleration.latency_ms} ms</em></div>
+                    <code>{acceleration.accelerated_url}</code>
+                    <div className="inline-actions">
+                      <button className="secondary-button" onClick={() => navigator.clipboard.writeText(acceleration.accelerated_url)}><Clipboard size={15} />复制链接</button>
+                      <button className="secondary-button" onClick={openAcceleratedUrl}><ExternalLink size={15} />打开下载</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty-row">
+                    {status.download_acceleration.best_mirror
+                      ? `当前缓存节点：${status.download_acceleration.best_mirror}`
+                      : "粘贴公开下载链接后，会从站点节点和内置候选节点中选择最快线路"}
+                  </div>
+                )}
+                {status.download_acceleration.candidates.length > 0 && (
+                  <div className="mirror-candidates">
+                    {status.download_acceleration.candidates.slice(0, 3).map((candidate) => (
+                      <div key={candidate.host}>
+                        <i className={candidate.last_error ? "dot bad" : "dot"} />
+                        <span>{candidate.host}</span>
+                        <strong>{candidate.last_error ? "失败" : `${candidate.latency_ms ?? "--"} ms`}</strong>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="empty-row">在设置中启用后，仅用于公开下载链接</div>
+            )}
+            <p className="security-note">镜像源来自 github.akams.cn 及内置候选，证书由第三方提供；不会携带 GitHub Token，不用于 API、登录或私有仓库。</p>
+          </div>
+
           <div className="security-strip"><ShieldCheck size={18} /><div><strong>端到端 TLS</strong><span>不安装 CA，不解密流量，不关闭证书验证</span></div></div>
         </section>
       ) : (
@@ -263,6 +388,17 @@ export default function App() {
             <label><span>端口</span><input type="number" min="1" max="65535" value={upstreamPort} onChange={(event) => setUpstreamPort(event.target.value)} disabled={upstreamType === "none"} /></label>
             <label><span>后台检测</span><select value={refreshSeconds} onChange={(event) => setRefreshSeconds(event.target.value)}><option value="60">1 分钟</option><option value="300">5 分钟</option><option value="600">10 分钟</option><option value="1800">30 分钟</option></select></label>
             <button className="primary-button full" onClick={saveSettings} disabled={busy}><Check size={16} />保存设置</button>
+          </div>
+
+          <div className="section-block form-grid">
+            <div className="section-title full"><div><Download size={17} /><h2>下载加速</h2></div></div>
+            <label className="checkbox-field full">
+              <input type="checkbox" checked={downloadEnabled} onChange={(event) => setDownloadEnabled(event.target.checked)} />
+              <span>启用第三方 GitHub 下载镜像</span>
+            </label>
+            <label className="full"><span>节点发现页面</span><input value={accelerationSite} onChange={(event) => setAccelerationSite(event.target.value)} placeholder="https://github.akams.cn/" /></label>
+            <div className="field-hint full">默认关闭。仅处理 Release、Archive、Raw、Gist 和 Codeload 公开下载，不代理 GitHub API 或登录请求。</div>
+            <button className="primary-button full" onClick={saveSettings} disabled={busy}><Check size={16} />保存下载加速设置</button>
           </div>
 
           <div className="section-block command-list">

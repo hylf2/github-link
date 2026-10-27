@@ -23,6 +23,7 @@
 | GitHub SSH | 代理 SSH 连接，`github.com:22` 不可用时回退 `ssh.github.com:443` |
 | PAC 自动代理 | 仅将 GitHub 网页及静态资源域名交给本地代理，其余流量保持直连 |
 | 上游代理 | 支持 HTTP CONNECT 和 SOCKS5，可在优化直连失败时自动回退 |
+| 下载镜像加速 | 从 `github.akams.cn` 发现候选节点，针对具体 Release/Archive/Raw 文件测速并生成最佳镜像链接 |
 | 菜单栏 App | 展示线路、评分、候选 IP、TCP/TLS 延迟、错误和代理设置 |
 | CLI | 提供启停、诊断、探测、线路切换、命令代理和配置恢复 |
 
@@ -38,6 +39,9 @@ flowchart LR
     F --> G["候选 IP 竞速"]
     G --> H["GitHub 官方服务器"]
     C -.失败回退.-> I["HTTP / SOCKS5 上游"]
+    J["公开下载链接"] --> K["镜像节点发现"]
+    K --> L["按目标文件测速"]
+    L --> M["最佳第三方镜像 URL"]
 ```
 
 HTTPS 建立 CONNECT 后，GitHub Link 只转发原始 TLS 字节。证书校验仍由浏览器、Git 或 curl 完成。
@@ -54,6 +58,7 @@ HTTPS 建立 CONNECT 后，GitHub Link 只转发原始 TLS 字节。证书校验
 | 监听范围 | 仅 `127.0.0.1` |
 | 目标范围 | GitHub 域名白名单，端口仅 `443/22` |
 | 配置修改 | 使用独立 include 文件，修改前创建备份，可执行 `restore` |
+| 第三方下载镜像 | 默认关闭；仅处理公开下载 URL，不参与 API、登录、Token 或私有仓库 |
 
 ## 系统要求
 
@@ -98,6 +103,8 @@ github-link enable
 github-link disable
 github-link status --json
 github-link probe --json
+github-link mirrors --json
+github-link accelerate 'https://github.com/owner/repo/releases/download/v1/file.zip' --open
 github-link route auto
 github-link route optimized_direct
 github-link route upstream

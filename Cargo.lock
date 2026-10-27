@@ -1255,7 +1255,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-app"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "github-link-core",
@@ -1269,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-cli"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1281,11 +1281,12 @@ dependencies = [
 
 [[package]]
 name = "github-link-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "dirs",
  "futures",
+ "regex",
  "reqwest 0.12.28",
  "rustls",
  "rustls-native-certs",
@@ -1297,11 +1298,12 @@ dependencies = [
  "tokio-rustls",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
+ "url",
 ]
 
 [[package]]
 name = "github-link-daemon"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1316,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "github-link-proxy"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytes",

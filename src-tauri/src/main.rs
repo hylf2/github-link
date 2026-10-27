@@ -1,6 +1,6 @@
 use github_link_core::{
     AppConfig, ControlRequest, ControlResponse, RouteMode, UpstreamConfig, UpstreamKind,
-    config_path, socket_path,
+    config_path, is_accelerated_github_url, socket_path,
 };
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,10 @@ struct SettingsInput {
     upstream_host: Option<String>,
     upstream_port: Option<u16>,
     refresh_seconds: u64,
+    #[serde(default)]
+    download_acceleration_enabled: bool,
+    download_acceleration_site: Option<String>,
+    download_acceleration_max_nodes: Option<usize>,
 }
 
 #[tauri::command]
@@ -43,6 +47,16 @@ async fn probe(app: AppHandle) -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
+async fn refresh_mirrors(app: AppHandle) -> Result<serde_json::Value, String> {
+    response_value(send_with_recovery(&app, ControlRequest::RefreshMirrors).await)
+}
+
+#[tauri::command]
+async fn accelerate_download(app: AppHandle, url: String) -> Result<serde_json::Value, String> {
+    response_value(send_with_recovery(&app, ControlRequest::Accelerate { url }).await)
+}
+
+#[tauri::command]
 async fn set_route(app: AppHandle, mode: String) -> Result<serde_json::Value, String> {
     let mode = mode
         .parse::<RouteMode>()
@@ -55,6 +69,19 @@ async fn save_settings(app: AppHandle, input: SettingsInput) -> Result<serde_jso
     let mut config =
         AppConfig::load_or_create(&config_path()).map_err(|error| error.to_string())?;
     config.refresh_seconds = input.refresh_seconds.clamp(30, 3_600);
+    config.download_acceleration.enabled = input.download_acceleration_enabled;
+    if let Some(site_url) = input.download_acceleration_site {
+        let site_url = site_url.trim();
+        if !site_url.is_empty() {
+            if !site_url.starts_with("https://") {
+                return Err("Download mirror site must use HTTPS".into());
+            }
+            config.download_acceleration.site_url = site_url.to_owned();
+        }
+    }
+    if let Some(max_nodes) = input.download_acceleration_max_nodes {
+        config.download_acceleration.max_nodes = max_nodes.clamp(1, 32);
+    }
     config.upstream = match (
         input.upstream_kind.as_deref(),
         input.upstream_host,
@@ -99,6 +126,18 @@ fn run_cli(app: AppHandle, action: String) -> Result<String, String> {
 fn open_network_settings() -> Result<(), String> {
     Command::new("open")
         .arg("x-apple.systempreferences:com.apple.Network-Settings.extension")
+        .status()
+        .map_err(|error| error.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn open_accelerated_url(url: String) -> Result<(), String> {
+    if !is_accelerated_github_url(&url) {
+        return Err("Refusing to open an unvalidated accelerated URL".into());
+    }
+    Command::new("open")
+        .arg(url)
         .status()
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -305,10 +344,13 @@ fn main() {
             get_status,
             get_config,
             probe,
+            refresh_mirrors,
+            accelerate_download,
             set_route,
             save_settings,
             run_cli,
-            open_network_settings
+            open_network_settings,
+            open_accelerated_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitHub Link");

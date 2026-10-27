@@ -56,6 +56,7 @@ async fn main() -> Result<()> {
         shutdown_tx.clone(),
     ));
     let refresh = tokio::spawn(run_refresh(runtime.clone(), shutdown_rx.clone()));
+    let mirror_refresh = tokio::spawn(run_mirror_refresh(runtime.clone(), shutdown_rx.clone()));
 
     info!(config = %args.config.display(), socket = %args.socket.display(), "GitHub Link daemon started");
     tokio::select! {
@@ -69,6 +70,7 @@ async fn main() -> Result<()> {
     }
     let _ = shutdown_tx.send(true);
     refresh.abort();
+    mirror_refresh.abort();
     if args.socket.exists() {
         let _ = fs::remove_file(&args.socket);
     }
@@ -144,6 +146,18 @@ async fn handle_control(
                 }
             }
         }
+        ControlRequest::RefreshMirrors => match runtime.refresh_mirrors().await {
+            Ok(candidates) => ControlResponse::Mirrors { candidates },
+            Err(error) => ControlResponse::Error {
+                message: error.to_string(),
+            },
+        },
+        ControlRequest::Accelerate { url } => match runtime.accelerate_download(&url).await {
+            Ok(result) => ControlResponse::Acceleration { result },
+            Err(error) => ControlResponse::Error {
+                message: error.to_string(),
+            },
+        },
         ControlRequest::SetRoute { mode } => {
             {
                 let mut config = runtime.config.write().await;
@@ -164,7 +178,17 @@ async fn handle_control(
             let mut status = runtime.status.write().await;
             status.enabled = config.enabled;
             status.configured_mode = config.route_mode;
+            status.download_acceleration.enabled = config.download_acceleration.enabled;
             status.touch();
+            drop(status);
+            if config.download_acceleration.enabled {
+                let refresh_runtime = runtime.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = refresh_runtime.refresh_mirrors().await {
+                        warn!(%error, "download mirror refresh after reload failed");
+                    }
+                });
+            }
             ControlResponse::Ok {
                 message: "configuration reloaded".into(),
             }
@@ -192,6 +216,29 @@ async fn run_refresh(runtime: ProxyRuntime, mut shutdown: watch::Receiver<bool>)
                     error!(%error, "background GitHub probe failed");
                 }
             }
+            result = shutdown.changed() => {
+                if result.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+async fn run_mirror_refresh(
+    runtime: ProxyRuntime,
+    mut shutdown: watch::Receiver<bool>,
+) -> Result<()> {
+    loop {
+        let config = runtime.config.read().await.clone();
+        if config.download_acceleration.enabled
+            && let Err(error) = runtime.refresh_mirrors().await
+        {
+            error!(%error, "background download mirror probe failed");
+        }
+        let seconds = config.download_acceleration.refresh_seconds.max(60);
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(seconds)) => {}
             result = shutdown.changed() => {
                 if result.is_err() || *shutdown.borrow() {
                     return Ok(());

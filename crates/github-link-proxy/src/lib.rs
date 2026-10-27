@@ -1,7 +1,8 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use github_link_core::{
-    AppConfig, DaemonStatus, IpSelector, RouteMode, UpstreamConfig, UpstreamKind,
+    AccelerationResult, AppConfig, DaemonStatus, IpSelector, MirrorAccelerator, MirrorCandidate,
+    RouteMode, UpstreamConfig, UpstreamKind, now_unix_ms,
 };
 use http_body_util::Full;
 use hyper::body::Incoming;
@@ -23,22 +24,27 @@ use tracing::{info, warn};
 pub struct ProxyRuntime {
     pub config: Arc<RwLock<AppConfig>>,
     pub selector: IpSelector,
+    pub accelerator: MirrorAccelerator,
     pub status: Arc<RwLock<DaemonStatus>>,
 }
 
 impl ProxyRuntime {
     pub fn new(config: AppConfig) -> Result<Self> {
-        let status = Arc::new(RwLock::new(DaemonStatus::new(
+        let mut initial_status = DaemonStatus::new(
             config.enabled,
             config.route_mode,
             config.proxy_port,
             config.pac_port,
-        )));
+        );
+        initial_status.download_acceleration.enabled = config.download_acceleration.enabled;
+        let status = Arc::new(RwLock::new(initial_status));
         let config = Arc::new(RwLock::new(config));
         let selector = IpSelector::new(config.clone())?;
+        let accelerator = MirrorAccelerator::new()?;
         Ok(Self {
             config,
             selector,
+            accelerator,
             status,
         })
     }
@@ -113,6 +119,53 @@ impl ProxyRuntime {
         let mut status = self.status.write().await;
         status.candidates = snapshot;
         status.touch();
+    }
+
+    pub async fn refresh_mirrors(&self) -> Result<Vec<MirrorCandidate>> {
+        let config = self.config.read().await.clone();
+        let result = self.accelerator.refresh(&config).await;
+        let mut status = self.status.write().await;
+        status.download_acceleration.enabled = config.download_acceleration.enabled;
+        status.download_acceleration.checked_at_unix_ms = Some(now_unix_ms());
+        match result {
+            Ok(candidates) => {
+                status.download_acceleration.best_mirror =
+                    candidates.first().map(|item| item.host.clone());
+                status.download_acceleration.candidates = candidates.clone();
+                status.download_acceleration.last_error = None;
+                status.touch();
+                Ok(candidates)
+            }
+            Err(error) => {
+                status.download_acceleration.last_error = Some(error.to_string());
+                status.touch();
+                Err(error)
+            }
+        }
+    }
+
+    pub async fn accelerate_download(&self, input: &str) -> Result<AccelerationResult> {
+        let config = self.config.read().await.clone();
+        let result = self.accelerator.accelerate(&config, input).await;
+        let mut status = self.status.write().await;
+        status.download_acceleration.enabled = config.download_acceleration.enabled;
+        status.download_acceleration.checked_at_unix_ms = Some(now_unix_ms());
+        match result {
+            Ok(result) => {
+                status.download_acceleration.best_mirror = Some(result.mirror.clone());
+                status.download_acceleration.accelerated_url = Some(result.accelerated_url.clone());
+                status.download_acceleration.latency_ms = Some(result.latency_ms);
+                status.download_acceleration.candidates = result.candidates.clone();
+                status.download_acceleration.last_error = None;
+                status.touch();
+                Ok(result)
+            }
+            Err(error) => {
+                status.download_acceleration.last_error = Some(error.to_string());
+                status.touch();
+                Err(error)
+            }
+        }
     }
 
     async fn connect_target(&self, host: &str, port: u16) -> Result<TcpStream> {

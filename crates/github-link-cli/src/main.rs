@@ -37,6 +37,17 @@ enum Commands {
         #[arg(long)]
         json: bool,
     },
+    Mirrors {
+        #[arg(long)]
+        json: bool,
+    },
+    Accelerate {
+        url: String,
+        #[arg(long)]
+        open: bool,
+        #[arg(long)]
+        json: bool,
+    },
     Route {
         mode: RouteMode,
     },
@@ -65,6 +76,20 @@ async fn main() -> Result<()> {
         Commands::Status { json } => print_response(send(ControlRequest::Status).await?, json),
         Commands::Probe { host, json } => {
             print_response(send(ControlRequest::Probe { host }).await?, json)
+        }
+        Commands::Mirrors { json } => {
+            print_response(send(ControlRequest::RefreshMirrors).await?, json)
+        }
+        Commands::Accelerate { url, open, json } => {
+            let response = send(ControlRequest::Accelerate { url }).await?;
+            if open && let ControlResponse::Acceleration { result } = &response {
+                let status = Command::new("open")
+                    .arg(&result.accelerated_url)
+                    .status()
+                    .context("open accelerated URL")?;
+                anyhow::ensure!(status.success(), "macOS failed to open accelerated URL");
+            }
+            print_response(response, json)
         }
         Commands::Route { mode } => {
             print_response(send(ControlRequest::SetRoute { mode }).await?, false)
@@ -135,7 +160,14 @@ async fn send(request: ControlRequest) -> Result<ControlResponse> {
 
 fn print_response(response: ControlResponse, json: bool) -> Result<()> {
     if json {
+        let error = match &response {
+            ControlResponse::Error { message } => Some(message.clone()),
+            _ => None,
+        };
         println!("{}", serde_json::to_string_pretty(&response)?);
+        if let Some(message) = error {
+            anyhow::bail!(message);
+        }
         return Ok(());
     }
     match response {
@@ -148,6 +180,35 @@ fn print_response(response: ControlResponse, json: bool) -> Result<()> {
             if let Some(error) = status.last_error {
                 println!("last error: {error}");
             }
+            if status.download_acceleration.enabled {
+                println!(
+                    "download mirror: {}",
+                    status
+                        .download_acceleration
+                        .best_mirror
+                        .as_deref()
+                        .unwrap_or("not checked")
+                );
+            }
+        }
+        ControlResponse::Mirrors { candidates } => {
+            for candidate in candidates {
+                if let Some(error) = candidate.last_error {
+                    println!("{}: {error}", candidate.host);
+                } else {
+                    println!(
+                        "{}: {} ms (score {:.1})",
+                        candidate.host,
+                        candidate.latency_ms.unwrap_or_default(),
+                        candidate.score
+                    );
+                }
+            }
+        }
+        ControlResponse::Acceleration { result } => {
+            println!("mirror: {}", result.mirror);
+            println!("latency: {} ms", result.latency_ms);
+            println!("url: {}", result.accelerated_url);
         }
         ControlResponse::Ok { message } => println!("{message}"),
         ControlResponse::Error { message } => anyhow::bail!(message),
